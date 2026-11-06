@@ -3,6 +3,7 @@
 > 改动内容（2026-11-06）：
 > 1. **图片自动转发**：`src/chat/hub.js` 新增 `extractImagePaths()`，从所有 DSH 会话事件里收集 dsh-image-gen 等插件生成的图片路径，在 turn 结束时以 Markdown 形式追加到回复里，自动发到 QQ。解决了妹妹画的图发不到 QQ 的问题。
 > 2. **表情包自动收集**：`src/chat/hub.js` 在 auto 模式下也尝试收集普通图片（`msg.images`），由 `stickers.collect()` 里的 `stickerSizeOk()` 尺寸检查过滤大照片。`src/chat/inbound.js` 的 `isStickerSegment()` 也放宽了带宽高的小图判定。解决了爸爸发的表情图收不进表情库的问题。
+> 3. **"内部备忘"防泄漏（v1.2.0 已修复，本 fork 继承）**：`src/purpose/module.js` 的 `cleanReply()` 正则在 v1.2.0（commit 81f3229，#172）已包含 `[【\[]?\s*内部备忘`，可截断行首的"内部备忘"段。本 fork 基于 v1.2.0，直接继承该修复，无需额外改动。注意：句中提到"内部备忘录"等正常词时不截断（测试用例要求）。
 >
 > 上游仓库：https://github.com/aureth-labs/dsh-aurabot-qq
 > 安装：`dsh plugin --profile web add git+https://github.com/Loiker/dsh-aurabot-qq.git`
