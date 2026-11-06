@@ -1,3 +1,12 @@
+> **⚠️ 这是 Loiker 的 fork（基于 aureth-labs/dsh-aurabot-qq v1.2.0）**
+>
+> 改动内容（2026-11-06）：
+> 1. **图片自动转发**：`src/chat/hub.js` 新增 `extractImagePaths()`，从所有 DSH 会话事件里收集 dsh-image-gen 等插件生成的图片路径，在 turn 结束时以 Markdown 形式追加到回复里，自动发到 QQ。解决了妹妹画的图发不到 QQ 的问题。
+> 2. **表情包自动收集**：`src/chat/hub.js` 在 auto 模式下也尝试收集普通图片（`msg.images`），由 `stickers.collect()` 里的 `stickerSizeOk()` 尺寸检查过滤大照片。`src/chat/inbound.js` 的 `isStickerSegment()` 也放宽了带宽高的小图判定。解决了爸爸发的表情图收不进表情库的问题。
+>
+> 上游仓库：https://github.com/aureth-labs/dsh-aurabot-qq
+> 安装：`dsh plugin --profile web add git+https://github.com/Loiker/dsh-aurabot-qq.git`
+
 <div align="center">
 
 <img src="assets/banner.svg" alt="Aurabot · 大肥鱼" width="100%" />
