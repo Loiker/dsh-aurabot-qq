@@ -1154,22 +1154,23 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       if (chatId.startsWith('system:')) return // 已超时的后台轮次不能误发到 QQ
       if (!text && !images.length) return release(chatId)
-      // [Loike fork fix3 2026-11-06] 发本轮全部图片，按顺序发。
-      // fix2 只发最后一张，但妹妹一次画 3 张（开心、委屈、生气）时，前两张就丢了。
+      // [Loike fork fix4 2026-11-06] 一张图一条消息。
+      // fix3 把 3 张图拼成一条消息发，QQ 只收到了第一张，后两张丢了。
+      // fix4 改成：先发文字（如果有），再一张一张发图片，每张图一条消息。
       // fix2 已在新一轮开始时清空 st.images，所以这里的图全是本轮新画的，不含旧图。
-      // 全部转成 Markdown，一张一张按顺序发。
-      // 图片路径可能是绝对路径（/home/dsh/.../dsh-image-gen/image-xxx.png），
-      // 也可能是 sha256 前缀（需要到工作区找文件，这里先按绝对路径处理）。
-      if (images.length) {
-        const allImages = images.filter((p) => p && p.startsWith('/'))
-        for (const img of allImages) {
-          const mdImage = `\n![图片](file://${img})`
-          text = (text ? text + '\n' : '') + mdImage.trim()
-        }
+      const allImages = images.filter((p) => p && p.startsWith('/'))
+      const deliverOpts = { wantVoice, autoReply, userText: st.lastText || '', own: true }
+      // 顺序发送：先文字，后图片，一张一条
+      let chain = Promise.resolve()
+      if (text) {
+        chain = chain.then(() => deliver(chatId, text, deliverOpts)).catch((error) => log.warn('发送文字出错：', error.message))
       }
-      if (!text) return release(chatId)
+      for (const img of allImages) {
+        const mdImage = `![图片](file://${img})`
+        chain = chain.then(() => deliver(chatId, mdImage, deliverOpts)).catch((error) => log.warn('发送图片出错：', error.message))
+      }
       // 发完再放开：发送期间来的消息也攒到下一段
-      deliver(chatId, text, { wantVoice, autoReply, userText: st.lastText || '', own: true }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
+      chain.finally(() => release(chatId))
     }
   }
 
