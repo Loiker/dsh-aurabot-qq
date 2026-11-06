@@ -1154,16 +1154,16 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       if (chatId.startsWith('system:')) return // 已超时的后台轮次不能误发到 QQ
       if (!text && !images.length) return release(chatId)
-      // [Loike fork fix2] 只发最新的一张图，不要发全部。
-      // st.images 可能包含历史事件里提取到的旧图（比如上一轮画的图），
-      // 如果全发出去，用户看到的第一张就是旧图。只取最后一张（最新画的）。
+      // [Loike fork fix3 2026-11-06] 发本轮全部图片，按顺序发。
+      // fix2 只发最后一张，但妹妹一次画 3 张（开心、委屈、生气）时，前两张就丢了。
+      // fix2 已在新一轮开始时清空 st.images，所以这里的图全是本轮新画的，不含旧图。
+      // 全部转成 Markdown，一张一张按顺序发。
       // 图片路径可能是绝对路径（/home/dsh/.../dsh-image-gen/image-xxx.png），
       // 也可能是 sha256 前缀（需要到工作区找文件，这里先按绝对路径处理）。
       if (images.length) {
-        const latestImages = images.filter((p) => p && p.startsWith('/'))
-        const latest = latestImages.length ? latestImages[latestImages.length - 1] : null
-        if (latest) {
-          const mdImage = `\n![图片](file://${latest})`
+        const allImages = images.filter((p) => p && p.startsWith('/'))
+        for (const img of allImages) {
+          const mdImage = `\n![图片](file://${img})`
           text = (text ? text + '\n' : '') + mdImage.trim()
         }
       }
