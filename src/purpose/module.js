@@ -72,6 +72,8 @@ export function cleanReply(raw, options) {
   let s = String(raw ?? '')
   const cut = /(^|\n)\s*(?:[【\[]\s*(?:目的|需求|情绪|类型|状态|待续)\s*[】\]]|[【\[]?\s*内部备忘)/.exec(s)
   if (cut) s = s.slice(0, cut.index) // 内部备忘不发到 QQ
+  // [Loike fork 说明] v1.2.0 已修复 #172：正则包含 [【\[]?\s*内部备忘，可匹配行首的"内部备忘"。
+  // 句中提到"内部备忘录"等正常词时不截断（测试用例明确要求），所以这里不做额外处理。
   s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
   s = s.replace(new RegExp(`^${ROLE}\\s*[:：]\\s*`), '')
   s = cleanOutboundText(s, options).trim()
