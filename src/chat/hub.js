@@ -1109,6 +1109,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (event.type === 'assistant/message') {
       const d = event.data || {}
       if (d.interrupted) return
+      // [Loike fork fix2] 新一轮开始时清空图片收集器，防止上一轮的旧图残留。
+      // d.turn 变化说明进入新一轮，之前收集的图片（如果有）都是上一轮的，应该丢掉。
+      if (d.turn !== undefined && st.lastTurn !== undefined && d.turn !== st.lastTurn) {
+        st.images = []
+      }
       // 最后一条 assistant 消息才是本轮回复；总是覆盖（空也覆盖），
       // 否则最后一条是空的（或只有工具调用）时会拿上一条过程性文字补发，把思考发出去。
       st.lastTurn = d.turn
@@ -1149,16 +1154,18 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       if (chatId.startsWith('system:')) return // 已超时的后台轮次不能误发到 QQ
       if (!text && !images.length) return release(chatId)
-      // [Loike fork] 把本轮收集到的图片以 Markdown 形式追加到文字后面，
-      // parseReply() 会把它解析成 { kind: 'image' } 发到 QQ。
+      // [Loike fork fix2] 只发最新的一张图，不要发全部。
+      // st.images 可能包含历史事件里提取到的旧图（比如上一轮画的图），
+      // 如果全发出去，用户看到的第一张就是旧图。只取最后一张（最新画的）。
       // 图片路径可能是绝对路径（/home/dsh/.../dsh-image-gen/image-xxx.png），
       // 也可能是 sha256 前缀（需要到工作区找文件，这里先按绝对路径处理）。
       if (images.length) {
-        const mdImages = images
-          .filter((p) => p && p.startsWith('/'))
-          .map((p) => `\n![图片](file://${p})`)
-          .join('')
-        if (mdImages) text = (text ? text + '\n' : '') + mdImages.trim()
+        const latestImages = images.filter((p) => p && p.startsWith('/'))
+        const latest = latestImages.length ? latestImages[latestImages.length - 1] : null
+        if (latest) {
+          const mdImage = `\n![图片](file://${latest})`
+          text = (text ? text + '\n' : '') + mdImage.trim()
+        }
       }
       if (!text) return release(chatId)
       // 发完再放开：发送期间来的消息也攒到下一段
