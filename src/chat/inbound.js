@@ -19,6 +19,9 @@ export function isStickerSegment(seg) {
   // 带文字说明的表情（比如「[啊？]」）是 sub_type 7；只认有说明的，普通图片的说明是「[图片]」
   if (sub === '7' && d.summary && d.summary !== '[图片]') return true
   if (d.emoji_id || d.emojiId) return true
+  // [Loike fork] 如果段里带了宽高，小尺寸图片也算表情包（QQ 事件里一般没有宽高，
+  // 真正的尺寸过滤在 stickers.collect() 里的 stickerSizeOk() 做，这里只是多一层判断）。
+  if (d.width && d.height && d.width <= 520 && d.height <= 520) return true
   return false
 }
 
