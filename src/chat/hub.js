@@ -78,6 +78,41 @@ export function assistantReplyText (message) {
   return message.content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim()
 }
 
+/**
+ * [Loike fork] 从任意对象里递归提取图片路径。
+ * dsh-image-gen 等插件生成的图片会以两种形式出现：
+ * 1. 工具结果文字里："It was also saved to the workspace as /path/to/dsh-image-gen/image-xxx.png"
+ * 2. 附件块：{ type: 'image', attachment: { attachmentId: 'sha256:xxx...' } }
+ * 这个函数把两种都找出来，返回本地文件路径数组。
+ */
+export function extractImagePaths (obj, out = new Set()) {
+  if (!obj || typeof obj !== 'object') {
+    if (typeof obj === 'string') {
+      // 匹配 "saved to the workspace as /path/to/image.png" 或直接的绝对路径
+      const re = /(?:saved to the workspace as\s+)?(\/[^\s'"]+?\/dsh-image-gen\/image-[a-f0-9]{8}\.(?:png|jpg|jpeg|webp|gif))/gi
+      let m
+      while ((m = re.exec(obj)) !== null) out.add(m[1])
+      // 也匹配通用的 /.../dsh-image-gen/image-xxx.png 路径
+      const re2 = /(\/[^\s'")\]]*?dsh-image-gen\/image-[a-f0-9]+\.(?:png|jpg|jpeg|webp|gif))/gi
+      while ((m = re2.exec(obj)) !== null) out.add(m[1])
+    }
+    return out
+  }
+  if (Array.isArray(obj)) {
+    for (const item of obj) extractImagePaths(item, out)
+    return out
+  }
+  // 附件块：{ type: 'image', attachment: { attachmentId: 'sha256:xxx' } }
+  // dsh-image-gen 的文件名就是 image-<sha256前8位>.png，但我们不知道工作区路径，
+  // 所以这里只记录 attachmentId，让调用方去工作区找文件
+  if (obj.type === 'image' && obj.attachment && typeof obj.attachment.attachmentId === 'string') {
+    const id = obj.attachment.attachmentId
+    if (id.startsWith('sha256:')) out.add(`sha256:${id.slice(7, 15)}`)
+  }
+  for (const v of Object.values(obj)) extractImagePaths(v, out)
+  return out
+}
+
 export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onMemoryCommand, onCommand, isMuted, dislikes, random = Math.random, moodEffects, localApi, hooks, availableModels, toolsGeneration, capabilitiesOf }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
@@ -1051,8 +1086,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 回合结束时内存映射可能已空（刚重启），退回持久化的映射，别把这一轮丢了（#159）
     const chatId = sessionToChat.get(key) || (event?.type === 'turn/end' ? chatOfSession(key) : '')
     if (!chatId || !event) return
-    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+    const st = turnState.get(key) || { lastTurn: -1, text: '', images: [], senders: new Set() }
     turnState.set(key, st)
+    // [Loike fork] 从所有事件里收集图片路径（dsh-image-gen 等插件生成的图）。
+    // 工具结果里会带 "saved to the workspace as /path/to/dsh-image-gen/image-xxx.png"，
+    // 也可能带 { type: 'image', attachment: { attachmentId: 'sha256:xxx' } } 附件块。
+    // 这些图片要跟着文字一起发到 QQ，不然妹妹画的图就丢了。
+    try {
+      const found = extractImagePaths(event)
+      for (const p of found) {
+        if (!st.images) st.images = []
+        if (!st.images.includes(p)) st.images.push(p)
+      }
+    } catch (error) {}
     if (event.type === 'user/message') {
       // 主人在 DSH 会话窗口里直接打字（不是从 QQ 转进来的，#58）：只有主人能操作 DSH，
       // 这一轮按「主人说的」算；不然重开会话后在面板里让她改资料会报没权限。
@@ -1076,12 +1122,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       stopTyping(key)
       const d = event.data || {}
       const completed = d.reason && d.reason.kind === 'completed'
-      const text = st.lastTurn === d.turn ? st.text : ''
+      let text = st.lastTurn === d.turn ? st.text : ''
+      const images = st.images || []
       const sys = st.system
       const wantVoice = Boolean(st.wantVoice)
       const autoReply = st.autoReply
       st.autoReply = null
       st.text = ''
+      st.images = []
       // 上一轮还在跑时新消息已经排队给「下一轮」：这一轮 turn/end 不能把下一轮的说话人清掉（#90）
       st.senders = st.pendingSenders || new Set()
       st.pendingSenders = new Set()
@@ -1100,6 +1148,18 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         return
       }
       if (chatId.startsWith('system:')) return // 已超时的后台轮次不能误发到 QQ
+      if (!text && !images.length) return release(chatId)
+      // [Loike fork] 把本轮收集到的图片以 Markdown 形式追加到文字后面，
+      // parseReply() 会把它解析成 { kind: 'image' } 发到 QQ。
+      // 图片路径可能是绝对路径（/home/dsh/.../dsh-image-gen/image-xxx.png），
+      // 也可能是 sha256 前缀（需要到工作区找文件，这里先按绝对路径处理）。
+      if (images.length) {
+        const mdImages = images
+          .filter((p) => p && p.startsWith('/'))
+          .map((p) => `\n![图片](file://${p})`)
+          .join('')
+        if (mdImages) text = (text ? text + '\n' : '') + mdImages.trim()
+      }
       if (!text) return release(chatId)
       // 发完再放开：发送期间来的消息也攒到下一段
       deliver(chatId, text, { wantVoice, autoReply, userText: st.lastText || '', own: true }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
@@ -1374,11 +1434,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     //           真正能不能收由工具那边再按「这一轮说话的全是主人」把关
     let stickerPick = 0
     const collectMode = cfg.stickers.collectMode || 'auto'
-    if (allowed.allowed && msg.stickers.length && cfg.stickers.collect) {
+    if (allowed.allowed && cfg.stickers.collect) {
       const okSrc = msg.kind === 'group' ? cfg.stickers.fromGroups : cfg.stickers.fromPrivate
       if (okSrc) {
         if (collectMode === 'auto') {
           for (const s of msg.stickers) stickers.collect(s, msg.chatId).then((r) => { if (!r.ok) log.debug('没收这张表情：', r.reason) }).catch(() => {})
+          // [Loike fork] 爸爸发的表情图大多是 sub_type=0 的普通图片，isStickerSegment() 认不出来，
+          // 所以这里也尝试收集普通图片。stickers.collect() 里有 stickerSizeOk() 尺寸检查，
+          // 大照片（边长 > 520px）会被过滤掉，只有小尺寸的表情图能收进来。
+          for (const s of msg.images) stickers.collect(s, msg.chatId).then((r) => { if (!r.ok) log.debug('没收这张图片（可能不是表情）：', r.reason) }).catch(() => {})
         } else {
           stickerPick = rememberStickers(msg.chatId, msg.stickers)
           // 只听主人的：别人发的先悄悄记着（主人之后说「收下那张」还能用），但不提示她
